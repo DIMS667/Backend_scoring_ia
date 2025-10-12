@@ -1,5 +1,17 @@
+
+# ============================================
+# apps/demands/models.py - AVEC VALIDATORS ET UTILS
+# ============================================
+
 from django.db import models
+from django.core.exceptions import ValidationError
+
+# Import core
+from core.validators import validate_amount
+from core.utils import generate_reference_number
+
 from apps.accounts.models import User
+
 
 class CreditDemand(models.Model):
     STATUS_CHOICES = [
@@ -22,6 +34,9 @@ class CreditDemand(models.Model):
     # Relations
     client = models.ForeignKey(User, on_delete=models.CASCADE, related_name='demands')
     assigned_agent = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_demands')
+    
+    # Référence unique
+    reference = models.CharField(max_length=50, unique=True, blank=True, editable=False)
     
     # Credit details
     credit_type = models.CharField(max_length=20, choices=CREDIT_TYPE_CHOICES)
@@ -51,11 +66,28 @@ class CreditDemand(models.Model):
         verbose_name_plural = 'Demandes de Crédit'
     
     def __str__(self):
-        return f"Demande #{self.id} - {self.client.get_full_name()} - {self.amount} FCFA"
+        return f"Demande #{self.reference or self.id} - {self.client.get_full_name()} - {self.amount} FCFA"
+    
+    def save(self, *args, **kwargs):
+        # Générer référence unique
+        if not self.reference:
+            self.reference = generate_reference_number('CR')
+        super().save(*args, **kwargs)
+    
+    def clean(self):
+        """Validation personnalisée"""
+        super().clean()
+        
+        # Valider le montant
+        validate_amount(self.amount, min_amount=100000, max_amount=100000000)
+        
+        # Valider la durée
+        if self.duration_months < 6 or self.duration_months > 360:
+            raise ValidationError({'duration_months': 'La durée doit être entre 6 et 360 mois'})
     
     @property
     def monthly_payment(self):
-        """Calcul mensualité approximative (formule simplifiée)"""
+        """Calcul mensualité approximative"""
         if self.approved_amount and self.approved_duration and self.interest_rate:
             P = float(self.approved_amount)
             r = float(self.interest_rate) / 100 / 12
@@ -89,7 +121,15 @@ class Document(models.Model):
         ordering = ['-uploaded_at']
     
     def __str__(self):
-        return f"{self.get_document_type_display()} - Demande #{self.demand.id}"
+        return f"{self.get_document_type_display()} - Demande #{self.demand.reference or self.demand.id}"
+    
+    def clean(self):
+        """Validation personnalisée"""
+        super().clean()
+        
+        # Vérifier la taille du fichier (5MB max)
+        if self.file and self.file.size > 5 * 1024 * 1024:
+            raise ValidationError({'file': 'Le fichier ne doit pas dépasser 5MB'})
 
 
 class DemandComment(models.Model):
@@ -104,4 +144,4 @@ class DemandComment(models.Model):
         ordering = ['created_at']
     
     def __str__(self):
-        return f"Commentaire de {self.author.get_full_name()} sur demande #{self.demand.id}"
+        return f"Commentaire de {self.author.get_full_name()} sur demande #{self.demand.reference or self.demand.id}"

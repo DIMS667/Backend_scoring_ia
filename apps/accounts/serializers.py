@@ -1,6 +1,15 @@
+# ============================================
+# apps/accounts/serializers.py - AVEC VALIDATORS
+# ============================================
+
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
+
+# Import core validators
+from core.validators import validate_cni_number, validate_phone_number
+
 from .models import User, ClientProfile
+
 
 class ClientProfileSerializer(serializers.ModelSerializer):
     debt_ratio = serializers.ReadOnlyField()
@@ -9,6 +18,17 @@ class ClientProfileSerializer(serializers.ModelSerializer):
         model = ClientProfile
         fields = '__all__'
         read_only_fields = ['user', 'created_at', 'updated_at']
+    
+    def validate_cni_number(self, value):
+        """Valider le format CNI"""
+        validate_cni_number(value)
+        return value
+    
+    def validate_monthly_income(self, value):
+        """Valider que le revenu est positif"""
+        if value <= 0:
+            raise serializers.ValidationError("Le revenu doit être supérieur à 0")
+        return value
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -18,6 +38,12 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 'phone', 'role', 'client_profile', 'created_at']
         read_only_fields = ['id', 'created_at']
+    
+    def validate_phone(self, value):
+        """Valider le format téléphone"""
+        if value:
+            validate_phone_number(value)
+        return value
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -33,11 +59,16 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"password": "Les mots de passe ne correspondent pas."})
         return attrs
     
+    def validate_phone(self, value):
+        """Valider le format téléphone"""
+        if value:
+            validate_phone_number(value)
+        return value
+    
     def create(self, validated_data):
         validated_data.pop('password2')
         user = User.objects.create_user(**validated_data)
         
-        # Créer profil client si rôle CLIENT
         if user.role == 'CLIENT':
             ClientProfile.objects.create(
                 user=user,

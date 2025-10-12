@@ -1,11 +1,22 @@
+
+# ============================================
+# apps/scoring/views.py - VERSION COMPLÈTE
+# ============================================
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+
+# Import core
+from core.permissions import IsAgent
+from core.exceptions import InsufficientScoreException
+
 from .models import CreditScore, PaymentHistory, Transaction
 from .serializers import CreditScoreSerializer, PaymentHistorySerializer, TransactionSerializer
 from .services import calculate_score
 from apps.demands.models import CreditDemand
+
 
 class CreditScoreViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = CreditScore.objects.all()
@@ -18,7 +29,7 @@ class CreditScoreViewSet(viewsets.ReadOnlyModelViewSet):
             return CreditScore.objects.filter(demand__client=user)
         return CreditScore.objects.all()
     
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAgent])
     def calculate(self, request):
         """Calculer le score pour une demande spécifique"""
         demand_id = request.data.get('demand_id')
@@ -31,18 +42,8 @@ class CreditScoreViewSet(viewsets.ReadOnlyModelViewSet):
         
         try:
             demand = CreditDemand.objects.get(id=demand_id)
-            
-            # Vérifier permissions
-            if request.user.role == 'CLIENT' and demand.client != request.user:
-                return Response(
-                    {'error': 'Permission refusée'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            
-            # Calculer le score
             score = calculate_score(demand)
             serializer = self.get_serializer(score)
-            
             return Response(serializer.data)
             
         except CreditDemand.DoesNotExist:
@@ -62,7 +63,6 @@ class PaymentHistoryViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role == 'CLIENT':
             return PaymentHistory.objects.filter(client=user)
         
-        # Agent peut voir l'historique d'un client spécifique
         client_id = self.request.query_params.get('client_id')
         if client_id:
             return PaymentHistory.objects.filter(client_id=client_id)
@@ -80,7 +80,6 @@ class TransactionViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role == 'CLIENT':
             return Transaction.objects.filter(client=user)
         
-        # Agent peut voir les transactions d'un client spécifique
         client_id = self.request.query_params.get('client_id')
         if client_id:
             return Transaction.objects.filter(client_id=client_id)

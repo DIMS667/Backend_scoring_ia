@@ -1,10 +1,17 @@
+# ============================================
+# apps/demands/views.py - VERSION COMPLÈTE
+# ============================================
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+
+# Import core
 from core.permissions import IsAgent, IsOwnerOrAgent
-from core.exceptions import InvalidDemandStatusException
+from core.exceptions import InvalidDemandStatusException, DocumentUploadException
+
 from .models import CreditDemand, Document, DemandComment
 from .serializers import (
     CreditDemandSerializer, 
@@ -13,9 +20,11 @@ from .serializers import (
     DocumentUploadSerializer,
     DemandCommentSerializer
 )
+from .services import notify_demand_submitted, notify_demand_decision
+
 
 class CreditDemandViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOwnerOrAgent]
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -25,9 +34,7 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'CLIENT':
-            # Client voit uniquement ses demandes
             return CreditDemand.objects.filter(client=user)
-        # Agent voit toutes les demandes
         return CreditDemand.objects.select_related('client', 'assigned_agent').prefetch_related('documents', 'comments')
     
     def perform_create(self, serializer):
@@ -39,9 +46,8 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand = self.get_object()
         
         if demand.status != 'DRAFT':
-            return Response(
-                {'error': 'Seules les demandes en brouillon peuvent être soumises'},
-                status=status.HTTP_400_BAD_REQUEST
+            raise InvalidDemandStatusException(
+                detail='Seules les demandes en brouillon peuvent être soumises'
             )
         
         demand.status = 'SUBMITTED'
@@ -52,18 +58,15 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         from apps.scoring.services import calculate_score
         calculate_score(demand)
         
+        # Notification
+        notify_demand_submitted(demand)
+        
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
     
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAgent])
     def approve(self, request, pk=None):
         """Approuver une demande (Agent uniquement)"""
-        if request.user.role != 'AGENT':
-            return Response(
-                {'error': 'Seuls les agents peuvent approuver'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
         demand = self.get_object()
         
         demand.status = 'APPROVED'
@@ -75,25 +78,21 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand.interest_rate = request.data.get('interest_rate', 8.5)
         demand.save()
         
+        # Notification
+        notify_demand_decision(demand, approved=True)
+        
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
     
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAgent])
     def reject(self, request, pk=None):
         """Rejeter une demande (Agent uniquement)"""
-        if request.user.role != 'AGENT':
-            return Response(
-                {'error': 'Seuls les agents peuvent rejeter'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
         demand = self.get_object()
         
         comment = request.data.get('comment')
         if not comment:
-            return Response(
-                {'error': 'Un commentaire est obligatoire pour un rejet'},
-                status=status.HTTP_400_BAD_REQUEST
+            raise InvalidDemandStatusException(
+                detail='Un commentaire est obligatoire pour un rejet'
             )
         
         demand.status = 'REJECTED'
@@ -101,6 +100,9 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand.assigned_agent = request.user
         demand.decision_comment = comment
         demand.save()
+        
+        # Notification
+        notify_demand_decision(demand, approved=False)
         
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
@@ -112,8 +114,11 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         
         serializer = DocumentUploadSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(demand=demand)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            try:
+                serializer.save(demand=demand)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                raise DocumentUploadException(detail=str(e))
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])

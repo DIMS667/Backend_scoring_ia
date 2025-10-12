@@ -1,5 +1,14 @@
+# ============================================
+# apps/accounts/models.py - AVEC VALIDATORS
+# ============================================
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.core.exceptions import ValidationError
+
+# Import core validators
+from core.validators import validate_cni_number, validate_phone_number, validate_age
+
 
 class User(AbstractUser):
     ROLE_CHOICES = [
@@ -8,7 +17,7 @@ class User(AbstractUser):
     ]
     
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='CLIENT')
-    phone = models.CharField(max_length=20, blank=True)
+    phone = models.CharField(max_length=20, blank=True, validators=[validate_phone_number])
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -36,7 +45,12 @@ class ClientProfile(models.Model):
     ]
     
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='client_profile')
-    cni_number = models.CharField(max_length=50, unique=True, verbose_name="Numéro CNI")
+    cni_number = models.CharField(
+        max_length=50, 
+        unique=True, 
+        verbose_name="Numéro CNI",
+        validators=[validate_cni_number]
+    )
     birth_date = models.DateField(verbose_name="Date de naissance")
     birth_place = models.CharField(max_length=100, verbose_name="Lieu de naissance")
     marital_status = models.CharField(max_length=20, choices=MARITAL_STATUS_CHOICES, default='SINGLE')
@@ -74,3 +88,21 @@ class ClientProfile(models.Model):
         if self.monthly_income > 0:
             return (self.monthly_debt_payment / self.monthly_income) * 100
         return 0
+    
+    def clean(self):
+        """Validation personnalisée"""
+        super().clean()
+        
+        # Valider l'âge
+        if self.birth_date:
+            validate_age(self.birth_date)
+        
+        # Valider que le revenu est positif
+        if self.monthly_income <= 0:
+            raise ValidationError({'monthly_income': 'Le revenu doit être supérieur à 0'})
+        
+        # Valider que les mensualités ne dépassent pas le revenu
+        if self.monthly_debt_payment > self.monthly_income:
+            raise ValidationError({
+                'monthly_debt_payment': 'Les mensualités ne peuvent pas dépasser le revenu mensuel'
+            })

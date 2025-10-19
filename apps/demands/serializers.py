@@ -1,21 +1,19 @@
-# ============================================
-# apps/demands/serializers.py - AVEC VALIDATORS
-# ============================================
-
 from rest_framework import serializers
-
-# Import core validators et utils
-from core.validators import validate_amount
+from core.validators import validate_amount, validate_age
 from core.utils import format_currency
-
 from .models import CreditDemand, Document, DemandComment
 from apps.accounts.serializers import UserSerializer
 
-
 class DocumentSerializer(serializers.ModelSerializer):
+    file_size_display = serializers.SerializerMethodField()
+    
+    def get_file_size_display(self, obj):
+        """Formater la taille du fichier"""
+        return f"{obj.file_size / 1024:.1f} KB"
+    
     class Meta:
         model = Document
-        fields = ['id', 'document_type', 'file', 'original_filename', 'file_size', 'uploaded_at']
+        fields = ['id', 'document_type', 'file', 'original_filename', 'file_size', 'file_size_display', 'uploaded_at']
         read_only_fields = ['id', 'uploaded_at']
 
 
@@ -36,27 +34,40 @@ class CreditDemandSerializer(serializers.ModelSerializer):
     monthly_payment = serializers.ReadOnlyField()
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     credit_type_display = serializers.CharField(source='get_credit_type_display', read_only=True)
-    amount_formatted = serializers.SerializerMethodField()
+    
+    # Ajouter le score
+    score_value = serializers.SerializerMethodField()
+    
+    # Formatage des montants
+    amount_display = serializers.SerializerMethodField()
+    approved_amount_display = serializers.SerializerMethodField()
+    
+    def get_score_value(self, obj):
+        """Récupérer le score s'il existe"""
+        try:
+            return obj.score.score_value
+        except:
+            return None
+    
+    def get_amount_display(self, obj):
+        """Formater le montant"""
+        return format_currency(float(obj.amount))
+    
+    def get_approved_amount_display(self, obj):
+        """Formater le montant approuvé"""
+        if obj.approved_amount:
+            return format_currency(float(obj.approved_amount))
+        return None
+    
+    def validate_amount(self, value):
+        """Valider le montant avec le validateur du core"""
+        validate_amount(value)
+        return value
     
     class Meta:
         model = CreditDemand
         fields = '__all__'
         read_only_fields = ['id', 'client', 'assigned_agent', 'created_at', 'updated_at', 'submitted_at', 'decision_date']
-    
-    def get_amount_formatted(self, obj):
-        """Formater le montant en FCFA"""
-        return format_currency(obj.amount)
-    
-    def validate_amount(self, value):
-        """Valider le montant"""
-        validate_amount(value, min_amount=100000, max_amount=100000000)
-        return value
-    
-    def validate_duration_months(self, value):
-        """Valider la durée"""
-        if value < 6 or value > 360:
-            raise serializers.ValidationError("La durée doit être entre 6 et 360 mois")
-        return value
 
 
 class CreditDemandListSerializer(serializers.ModelSerializer):
@@ -64,15 +75,25 @@ class CreditDemandListSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source='client.get_full_name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     credit_type_display = serializers.CharField(source='get_credit_type_display', read_only=True)
-    amount_formatted = serializers.SerializerMethodField()
+    amount_display = serializers.SerializerMethodField()
+    
+    # Ajouter le score dans la liste
+    score = serializers.SerializerMethodField()
+    
+    def get_score(self, obj):
+        """Récupérer le score s'il existe"""
+        try:
+            return obj.score.score_value
+        except:
+            return None
+    
+    def get_amount_display(self, obj):
+        """Formater le montant"""
+        return format_currency(float(obj.amount))
     
     class Meta:
         model = CreditDemand
-        fields = ['id', 'client_name', 'credit_type', 'credit_type_display', 'amount', 'amount_formatted', 
-                  'duration_months', 'status', 'status_display', 'created_at', 'submitted_at']
-    
-    def get_amount_formatted(self, obj):
-        return format_currency(obj.amount)
+        fields = ['id', 'client_name', 'credit_type', 'credit_type_display', 'amount', 'amount_display', 'duration_months', 'status', 'status_display', 'score', 'created_at', 'submitted_at']
 
 
 class DocumentUploadSerializer(serializers.ModelSerializer):
@@ -83,14 +104,21 @@ class DocumentUploadSerializer(serializers.ModelSerializer):
         fields = ['document_type', 'file']
     
     def validate_file(self, value):
+        """Valider le fichier"""
         # Limite 5MB
         if value.size > 5 * 1024 * 1024:
             raise serializers.ValidationError("Le fichier ne doit pas dépasser 5MB")
         
-        # Types de fichiers autorisés
-        allowed_types = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg']
+        # Types autorisés
+        allowed_types = [
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'application/pdf',
+        ]
+        
         if value.content_type not in allowed_types:
-            raise serializers.ValidationError("Format de fichier non autorisé. Utilisez PDF, JPEG ou PNG")
+            raise serializers.ValidationError("Type de fichier non autorisé (JPG, PNG, PDF uniquement)")
         
         return value
     

@@ -1,17 +1,10 @@
-# ============================================
-# apps/demands/views.py - VERSION COMPLÈTE
-# ============================================
-
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
-
-# Import core
 from core.permissions import IsAgent, IsOwnerOrAgent
 from core.exceptions import InvalidDemandStatusException, DocumentUploadException
-
 from .models import CreditDemand, Document, DemandComment
 from .serializers import (
     CreditDemandSerializer, 
@@ -20,11 +13,9 @@ from .serializers import (
     DocumentUploadSerializer,
     DemandCommentSerializer
 )
-from .services import notify_demand_submitted, notify_demand_decision
-
 
 class CreditDemandViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, IsOwnerOrAgent]
+    permission_classes = [IsAuthenticated]
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -34,8 +25,18 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'CLIENT':
-            return CreditDemand.objects.filter(client=user)
-        return CreditDemand.objects.select_related('client', 'assigned_agent').prefetch_related('documents', 'comments')
+            # Client voit uniquement ses demandes
+            return CreditDemand.objects.filter(client=user).select_related('client', 'assigned_agent', 'score').prefetch_related('documents', 'comments')
+        # Agent voit toutes les demandes
+        return CreditDemand.objects.select_related('client', 'assigned_agent', 'score').prefetch_related('documents', 'comments')
+    
+    def get_permissions(self):
+        """Permissions différentes selon l'action"""
+        if self.action in ['approve', 'reject']:
+            return [IsAgent()]
+        elif self.action in ['retrieve', 'update', 'partial_update']:
+            return [IsOwnerOrAgent()]
+        return [IsAuthenticated()]
     
     def perform_create(self, serializer):
         serializer.save(client=self.request.user)
@@ -46,25 +47,39 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand = self.get_object()
         
         if demand.status != 'DRAFT':
-            raise InvalidDemandStatusException(
-                detail='Seules les demandes en brouillon peuvent être soumises'
-            )
+            raise InvalidDemandStatusException('Seules les demandes en brouillon peuvent être soumises')
         
         demand.status = 'SUBMITTED'
         demand.submitted_at = timezone.now()
         demand.save()
         
-        # Déclencher le scoring automatique
+        # FORCER le calcul du score immédiatement
         from apps.scoring.services import calculate_score
-        calculate_score(demand)
-        
-        # Notification
-        notify_demand_submitted(demand)
+        try:
+            score = calculate_score(demand)
+            
+            # Mettre à jour le statut en fonction de la recommandation
+            if score.ai_recommendation == 'AUTO_APPROVE':
+                demand.status = 'APPROVED'
+                demand.decision_date = timezone.now()
+            elif score.ai_recommendation == 'AUTO_REJECT':
+                demand.status = 'REJECTED'
+                demand.decision_date = timezone.now()
+            else:
+                demand.status = 'PENDING_ANALYST'
+            
+            demand.save()
+            
+        except Exception as e:
+            print(f"Erreur calcul score: {str(e)}")
+            # En cas d'erreur, mettre en analyse manuelle
+            demand.status = 'PENDING_ANALYST'
+            demand.save()
         
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
     
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAgent])
+    @action(detail=True, methods=['post'], permission_classes=[IsAgent])
     def approve(self, request, pk=None):
         """Approuver une demande (Agent uniquement)"""
         demand = self.get_object()
@@ -78,21 +93,19 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand.interest_rate = request.data.get('interest_rate', 8.5)
         demand.save()
         
-        # Notification
-        notify_demand_decision(demand, approved=True)
-        
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
     
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsAgent])
+    @action(detail=True, methods=['post'], permission_classes=[IsAgent])
     def reject(self, request, pk=None):
         """Rejeter une demande (Agent uniquement)"""
         demand = self.get_object()
         
         comment = request.data.get('comment')
         if not comment:
-            raise InvalidDemandStatusException(
-                detail='Un commentaire est obligatoire pour un rejet'
+            return Response(
+                {'error': 'Un commentaire est obligatoire pour un rejet'},
+                status=status.HTTP_400_BAD_REQUEST
             )
         
         demand.status = 'REJECTED'
@@ -100,9 +113,6 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand.assigned_agent = request.user
         demand.decision_comment = comment
         demand.save()
-        
-        # Notification
-        notify_demand_decision(demand, approved=False)
         
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
@@ -118,7 +128,7 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
                 serializer.save(demand=demand)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             except Exception as e:
-                raise DocumentUploadException(detail=str(e))
+                raise DocumentUploadException(str(e))
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])

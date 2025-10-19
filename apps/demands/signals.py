@@ -34,3 +34,24 @@ def log_demand_changes(sender, instance, created, **kwargs):
             'credit_type': instance.credit_type,
         }
     )
+
+
+@receiver(post_save, sender=CreditDemand)
+def auto_calculate_score(sender, instance, created, **kwargs):
+    """
+    CALCUL AUTOMATIQUE DU SCORE dès qu'une demande est soumise
+    """
+    # Calculer le score uniquement si la demande est soumise et n'a pas encore de score
+    if instance.status in ['SUBMITTED', 'PENDING_ANALYST', 'IN_ANALYSIS']:
+        # Vérifier si un score existe déjà
+        from apps.scoring.models import CreditScore
+        
+        if not hasattr(instance, 'score') or not CreditScore.objects.filter(demand=instance).exists():
+            # Calculer le score automatiquement
+            from apps.scoring.services import calculate_score
+            
+            try:
+                calculate_score(instance)
+                print(f"✅ Score calculé automatiquement pour la demande #{instance.id}")
+            except Exception as e:
+                print(f"❌ Erreur calcul score pour demande #{instance.id}: {str(e)}")

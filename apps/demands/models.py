@@ -1,6 +1,5 @@
-
 # ============================================
-# apps/demands/models.py - AVEC VALIDATORS ET UTILS
+# apps/demands/models.py - WORKFLOW CORRIGÉ
 # ============================================
 
 from django.db import models
@@ -14,10 +13,8 @@ from apps.accounts.models import User
 
 
 class CreditDemand(models.Model):
+    # STATUTS CORRECTS - PAS DE DRAFT/SUBMITTED/IN_ANALYSIS
     STATUS_CHOICES = [
-        ('DRAFT', 'Brouillon'),
-        ('SUBMITTED', 'Soumise'),
-        ('IN_ANALYSIS', 'En analyse'),
         ('PENDING_ANALYST', 'En attente analyste'),
         ('APPROVED', 'Approuvée'),
         ('REJECTED', 'Rejetée'),
@@ -44,8 +41,8 @@ class CreditDemand(models.Model):
     duration_months = models.IntegerField(verbose_name="Durée (mois)")
     purpose = models.TextField(verbose_name="Objet du crédit")
     
-    # Status
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    # Status - DEFAULT = PENDING_ANALYST (plus de DRAFT)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING_ANALYST')
     
     # Decision
     decision_date = models.DateTimeField(null=True, blank=True)
@@ -57,7 +54,7 @@ class CreditDemand(models.Model):
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    submitted_at = models.DateTimeField(null=True, blank=True)
+    # Plus de submitted_at - la création = soumission
     
     class Meta:
         db_table = 'credit_demands'

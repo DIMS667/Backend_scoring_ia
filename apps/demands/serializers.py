@@ -35,7 +35,7 @@ class CreditDemandSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     credit_type_display = serializers.CharField(source='get_credit_type_display', read_only=True)
     
-    # Ajouter le score
+    # Ajouter le score - VISIBLE SEULEMENT POUR LES AGENTS
     score_value = serializers.SerializerMethodField()
     
     # Formatage des montants
@@ -43,11 +43,14 @@ class CreditDemandSerializer(serializers.ModelSerializer):
     approved_amount_display = serializers.SerializerMethodField()
     
     def get_score_value(self, obj):
-        """Récupérer le score s'il existe"""
-        try:
-            return obj.score.score_value
-        except:
-            return None
+        """Récupérer le score s'il existe - SEULEMENT pour les agents"""
+        request = self.context.get('request')
+        if request and request.user.role == 'AGENT':
+            try:
+                return obj.score.score_value
+            except:
+                return None
+        return None  # Clients ne voient JAMAIS le score
     
     def get_amount_display(self, obj):
         """Formater le montant"""
@@ -67,7 +70,7 @@ class CreditDemandSerializer(serializers.ModelSerializer):
     class Meta:
         model = CreditDemand
         fields = '__all__'
-        read_only_fields = ['id', 'client', 'assigned_agent', 'created_at', 'updated_at', 'submitted_at', 'decision_date']
+        read_only_fields = ['id', 'client', 'assigned_agent', 'created_at', 'updated_at', 'decision_date']
 
 
 class CreditDemandListSerializer(serializers.ModelSerializer):
@@ -77,15 +80,18 @@ class CreditDemandListSerializer(serializers.ModelSerializer):
     credit_type_display = serializers.CharField(source='get_credit_type_display', read_only=True)
     amount_display = serializers.SerializerMethodField()
     
-    # Ajouter le score dans la liste
+    # Ajouter le score dans la liste - SEULEMENT pour les agents
     score = serializers.SerializerMethodField()
     
     def get_score(self, obj):
-        """Récupérer le score s'il existe"""
-        try:
-            return obj.score.score_value
-        except:
-            return None
+        """Récupérer le score s'il existe - SEULEMENT pour les agents"""
+        request = self.context.get('request')
+        if request and request.user.role == 'AGENT':
+            try:
+                return obj.score.score_value
+            except:
+                return None
+        return None  # Clients ne voient JAMAIS le score
     
     def get_amount_display(self, obj):
         """Formater le montant"""
@@ -93,7 +99,19 @@ class CreditDemandListSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = CreditDemand
-        fields = ['id', 'client_name', 'credit_type', 'credit_type_display', 'amount', 'amount_display', 'duration_months', 'status', 'status_display', 'score', 'created_at', 'submitted_at']
+        fields = [
+            'id', 
+            'client_name', 
+            'credit_type', 
+            'credit_type_display', 
+            'amount', 
+            'amount_display', 
+            'duration_months', 
+            'status', 
+            'status_display', 
+            'score', 
+            'created_at'  # CHANGÉ : submitted_at → created_at
+        ]
 
 
 class DocumentUploadSerializer(serializers.ModelSerializer):

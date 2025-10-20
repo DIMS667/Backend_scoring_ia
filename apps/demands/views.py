@@ -39,50 +39,31 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
-        serializer.save(client=self.request.user)
+        """
+        NOUVEAU WORKFLOW : 
+        - Création directe avec statut PENDING_ANALYST
+        - Score calculé automatiquement en arrière-plan via signals
+        - Plus de statut DRAFT/SUBMIT
+        """
+        # Sauvegarder avec le statut PENDING_ANALYST par défaut
+        demand = serializer.save(client=self.request.user)
+        
+        # Le calcul du score se fait automatiquement via le signal post_save
+        # Voir apps/demands/signals.py
     
-    @action(detail=True, methods=['post'])
-    def submit(self, request, pk=None):
-        """Soumettre une demande"""
-        demand = self.get_object()
-        
-        if demand.status != 'DRAFT':
-            raise InvalidDemandStatusException('Seules les demandes en brouillon peuvent être soumises')
-        
-        demand.status = 'SUBMITTED'
-        demand.submitted_at = timezone.now()
-        demand.save()
-        
-        # FORCER le calcul du score immédiatement
-        from apps.scoring.services import calculate_score
-        try:
-            score = calculate_score(demand)
-            
-            # Mettre à jour le statut en fonction de la recommandation
-            if score.ai_recommendation == 'AUTO_APPROVE':
-                demand.status = 'APPROVED'
-                demand.decision_date = timezone.now()
-            elif score.ai_recommendation == 'AUTO_REJECT':
-                demand.status = 'REJECTED'
-                demand.decision_date = timezone.now()
-            else:
-                demand.status = 'PENDING_ANALYST'
-            
-            demand.save()
-            
-        except Exception as e:
-            print(f"Erreur calcul score: {str(e)}")
-            # En cas d'erreur, mettre en analyse manuelle
-            demand.status = 'PENDING_ANALYST'
-            demand.save()
-        
-        serializer = self.get_serializer(demand)
-        return Response(serializer.data)
+    # SUPPRIMER la méthode submit() - plus nécessaire
     
     @action(detail=True, methods=['post'], permission_classes=[IsAgent])
     def approve(self, request, pk=None):
         """Approuver une demande (Agent uniquement)"""
         demand = self.get_object()
+        
+        # Vérifier que la demande peut être approuvée
+        if demand.status not in ['PENDING_ANALYST']:
+            return Response(
+                {'error': 'Cette demande ne peut plus être modifiée'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         demand.status = 'APPROVED'
         demand.decision_date = timezone.now()
@@ -93,6 +74,10 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand.interest_rate = request.data.get('interest_rate', 8.5)
         demand.save()
         
+        # Envoyer notification
+        from .services import notify_demand_decision
+        notify_demand_decision(demand, approved=True)
+        
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
     
@@ -100,6 +85,13 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
     def reject(self, request, pk=None):
         """Rejeter une demande (Agent uniquement)"""
         demand = self.get_object()
+        
+        # Vérifier que la demande peut être rejetée
+        if demand.status not in ['PENDING_ANALYST']:
+            return Response(
+                {'error': 'Cette demande ne peut plus être modifiée'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         comment = request.data.get('comment')
         if not comment:
@@ -114,6 +106,10 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
         demand.decision_comment = comment
         demand.save()
         
+        # Envoyer notification
+        from .services import notify_demand_decision
+        notify_demand_decision(demand, approved=False)
+        
         serializer = self.get_serializer(demand)
         return Response(serializer.data)
     
@@ -121,6 +117,13 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
     def upload_document(self, request, pk=None):
         """Upload un document pour la demande"""
         demand = self.get_object()
+        
+        # Les documents peuvent être uploadés uniquement si la demande est en attente
+        if demand.status not in ['PENDING_ANALYST']:
+            return Response(
+                {'error': 'Impossible d\'ajouter des documents à cette demande'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         serializer = DocumentUploadSerializer(data=request.data)
         if serializer.is_valid():
@@ -141,6 +144,31 @@ class CreditDemandViewSet(viewsets.ModelViewSet):
             serializer.save(demand=demand, author=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Annuler une demande (Client uniquement)"""
+        demand = self.get_object()
+        
+        # Vérifier les permissions
+        if request.user != demand.client:
+            return Response(
+                {'error': 'Seul le client peut annuler sa demande'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Vérifier que la demande peut être annulée
+        if demand.status not in ['PENDING_ANALYST']:
+            return Response(
+                {'error': 'Cette demande ne peut plus être annulée'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        demand.status = 'CANCELLED'
+        demand.save()
+        
+        serializer = self.get_serializer(demand)
+        return Response(serializer.data)
 
 
 class DocumentViewSet(viewsets.ReadOnlyModelViewSet):

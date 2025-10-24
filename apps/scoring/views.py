@@ -1,6 +1,5 @@
-
 # ============================================
-# apps/scoring/views.py - VERSION COMPLÈTE
+# apps/scoring/views.py - CORRIGÉ POUR RÉCUPÉRER LE BON SCORE
 # ============================================
 
 from rest_framework import viewsets, status
@@ -25,9 +24,57 @@ class CreditScoreViewSet(viewsets.ReadOnlyModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        
+        # Filtrer par demand_id si fourni (NOUVEAU)
+        demand_id = self.request.query_params.get('demand_id')
+        if demand_id:
+            if user.role == 'CLIENT':
+                return CreditScore.objects.filter(demand_id=demand_id, demand__client=user)
+            else:
+                return CreditScore.objects.filter(demand_id=demand_id)
+        
+        # Filtrage par rôle
         if user.role == 'CLIENT':
             return CreditScore.objects.filter(demand__client=user)
         return CreditScore.objects.all()
+    
+    @action(detail=False, methods=['get'])
+    def by_demand(self, request):
+        """NOUVEAU : Récupérer le score d'une demande spécifique"""
+        demand_id = request.query_params.get('demand_id')
+        
+        if not demand_id:
+            return Response(
+                {'error': 'demand_id est requis'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Vérifier que la demande existe et que l'utilisateur peut la voir
+            demand = CreditDemand.objects.get(id=demand_id)
+            
+            if request.user.role == 'CLIENT' and demand.client != request.user:
+                return Response(
+                    {'error': 'Accès non autorisé'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Récupérer le score
+            try:
+                score = CreditScore.objects.get(demand=demand)
+                serializer = self.get_serializer(score)
+                return Response(serializer.data)
+            except CreditScore.DoesNotExist:
+                return Response(
+                    {'error': 'Score non calculé pour cette demande'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+                
+        except CreditDemand.DoesNotExist:
+            return Response(
+                {'error': 'Demande non trouvée'},
+                status=status.HTTP_404_NOT_FOUND
+            )
     
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAgent])
     def calculate(self, request):

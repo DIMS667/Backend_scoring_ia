@@ -43,12 +43,23 @@ class CreditDemandSerializer(serializers.ModelSerializer):
     approved_amount_display = serializers.SerializerMethodField()
     
     def get_score_value(self, obj):
-        """Récupérer le score s'il existe - SEULEMENT pour les agents"""
+        """Récupérer le score s'il existe - SEULEMENT pour les agents - VERSION CORRIGÉE"""
         request = self.context.get('request')
         if request and request.user.role == 'AGENT':
             try:
-                return obj.score.score_value
-            except:
+                # CORRECTION : Utiliser hasattr pour vérifier l'existence de la relation
+                if hasattr(obj, 'score') and obj.score:
+                    return obj.score.score_value
+                else:
+                    # Essayer de récupérer le score depuis la base
+                    from apps.scoring.models import CreditScore
+                    try:
+                        score = CreditScore.objects.get(demand=obj)
+                        return score.score_value
+                    except CreditScore.DoesNotExist:
+                        return None
+            except Exception as e:
+                print(f"Erreur récupération score pour demande {obj.id}: {str(e)}")
                 return None
         return None  # Clients ne voient JAMAIS le score
     
@@ -84,14 +95,25 @@ class CreditDemandListSerializer(serializers.ModelSerializer):
     score = serializers.SerializerMethodField()
     
     def get_score(self, obj):
-        """Récupérer le score s'il existe - SEULEMENT pour les agents"""
+        """Récupérer le score s'il existe - SEULEMENT pour les agents - VERSION CORRIGÉE"""
         request = self.context.get('request')
         if request and request.user.role == 'AGENT':
             try:
-                return obj.score.score_value
-            except:
+                # CORRECTION : Utiliser hasattr pour vérifier l'existence de la relation
+                if hasattr(obj, 'score') and obj.score:
+                    return obj.score.score_value
+                else:
+                    # Essayer de récupérer le score depuis la base
+                    from apps.scoring.models import CreditScore
+                    try:
+                        score = CreditScore.objects.get(demand=obj)
+                        return score.score_value
+                    except CreditScore.DoesNotExist:
+                        return None
+            except Exception as e:
+                print(f"Erreur récupération score pour demande {obj.id}: {str(e)}")
                 return None
-        return None  # Clients ne voient JAMAIS le score
+        return None
     
     def get_amount_display(self, obj):
         """Formater le montant"""
